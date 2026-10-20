@@ -1,0 +1,59 @@
+Basic PKI command-list
+
+PKIVM:
+
+cd /etc/pki
+
+mkdir root-ca intermediate-ca
+
+cd root-ca
+
+openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out root-ca.key
+f
+openssl req -x509 -new -nodes -key root-ca.key -sha512 -days 300 -subj "/CN=Root-CA" -out root-ca.crt
+
+cd ../intermediate-ca
+
+openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out intermediate-ca.key
+
+openssl req -new -key intermediate-ca.key -out intermediate-ca.csr -subj "/CN=Intermediate-CA"
+
+nano intermediate-ext.cnf -> 
+basicConstraints = critical, CA:TRUE, pathlen:0
+keyUsage = critical, keyCertSign, cRLSign
+
+openssl x509 -req -in intermediate-ca.csr   -CA ../root-ca/root-ca.crt -CAkey ../root-ca/root-ca.key -CA createserial -out intermediate-ca.crt -days 1825 -sha256   -extfile intermediate-ext.cnf
+
+TLSVM:
+
+cd /etc/pki
+mkdir tls
+cd tls
+mkdir private certs
+cd private
+openssl genpkey -algorithm rsa -pkeyopt rsa_keygen_bits:4096 -out server.key
+cd ../certs
+openssl req -new -key ../private/server.key -out server.csr -subj "/CN=tls"
+
+nano server-ext.cnf
+basicConstraints = CA:FALSE
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:tls, IP:1.1.1.1
+
+scp server.csr user@1.1.1.1:/home/user/
+scp server-ext.cnf user@1.1.1.1:/home/user/
+exit
+
+ssh -L 5902:localhost:5902 user@1.1.1.1
+
+mv server.csr /etc/pki/intermediate-ca/
+mv server-ext.cnf /etc/pki/intermediate-ca/
+cd /etc/pki/intermediate-ca/
+
+openssl x509 -req -in server.csr -CA intermediate-ca.crt -CAkey intermediate-ca.key -CAcreateserial -out server.crt -days 397 -sha256 -extfile server-ext.cnf
+
+cat server.crt intermediate-ca.crt > server-fullchain.crt
+
+openssl verify -CAfile ../root-ca/root-ca.crt -untrusted intermediate-ca.crt server.crt
+
