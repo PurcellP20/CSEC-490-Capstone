@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Classical (RSA) TLS server certificate setup. Port of setup-tls-server.sh.
 
-Run on the TLS server VM (192.168.205.152) as root. Moving files to and from
+Run on the TLS server VM (192.168.205.100) as root. Moving files to and from
 the PKI VM is done by orchestrate.py on the client machine.
 
   sudo ./setup_tls_server.py csr [out-dir]         create key, CSR and extension file
@@ -19,7 +19,7 @@ TLS_DIR = Path(os.environ.get("TLS_DIR", "/etc/pki/tls"))
 TLS_CN = os.environ.get("TLS_CN", "tls")
 TLS_DNS = os.environ.get("TLS_DNS", "tls")
 # Address clients use to reach this TLS VM (SAN).
-TLS_IP = os.environ.get("TLS_IP", "192.168.205.152")
+TLS_IP = os.environ.get("TLS_IP", "192.168.205.100")
 
 PRIVATE_DIR = TLS_DIR / "private"
 CERT_DIR = TLS_DIR / "certs"

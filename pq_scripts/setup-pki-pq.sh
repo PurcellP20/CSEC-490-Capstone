@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Post-quantum PKI CA VM (192.168.205.151).
-# The TLS VM (192.168.205.152, user owen) calls "sign" over SSH.
+# Post-quantum PKI CA VM (192.168.193.147).
+# The TLS VM (192.168.205.100, user owen) calls "sign" over SSH.
 # Uses ML-DSA-65 for Root, Intermediate and server certificate signatures.
 # Run:
 #   sudo ./setup-pki-pq.sh

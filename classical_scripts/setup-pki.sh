@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Run on the PKI VM (192.168.205.151) as root (or via sudo).
-# The TLS VM (192.168.205.152, user owen) calls "sign" over SSH.
+# Run on the PKI VM (192.168.193.147) as root (or via sudo).
+# The TLS VM (192.168.205.100, user owen) calls "sign" over SSH.
 #   sudo ./setup-pki.sh              # create Root CA + Intermediate CA
 #   sudo ./setup-pki.sh sign <csr> <extfile> [out-dir]
 #

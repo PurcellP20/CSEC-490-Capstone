@@ -237,8 +237,8 @@ def main():
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("-v", "--variant", choices=[*VARIANTS, "all"], default="all")
     parser.add_argument("--user", default="owen", help="SSH user on both VMs")
-    parser.add_argument("--pki-host", default="192.168.205.151")
-    parser.add_argument("--tls-host", default="192.168.205.152")
+    parser.add_argument("--pki-host", default="192.168.193.147")
+    parser.add_argument("--tls-host", default="192.168.205.100")
     args = parser.parse_args()
 
     variants = list(VARIANTS) if args.variant == "all" else [args.variant]

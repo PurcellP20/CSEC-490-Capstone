@@ -34,14 +34,14 @@ require_openssl35() {
 }
 
 PKI_USER="${PKI_USER:-owen}"
-PKI_HOST="${PKI_HOST:-192.168.205.151}"
+PKI_HOST="${PKI_HOST:-192.168.193.147}"
 PKI_SIGN_SCRIPT="${PKI_SIGN_SCRIPT:-/usr/local/sbin/setup-pki-hybrid.sh}"
 PKI_REMOTE_IN="${PKI_REMOTE_IN:-/tmp/tls-sign-hybrid}"
 
 TLS_DIR="${TLS_DIR:-/etc/pki/tls-hybrid}"
 TLS_CN="${TLS_CN:-tls-hybrid}"
 TLS_DNS="${TLS_DNS:-tls-hybrid}"
-TLS_IP="${TLS_IP:-192.168.205.152}"
+TLS_IP="${TLS_IP:-192.168.205.100}"
 
 HYBRID_GROUP="${HYBRID_GROUP:-X25519MLKEM768}"
 TEST_PORT="${TEST_PORT:-4433}"

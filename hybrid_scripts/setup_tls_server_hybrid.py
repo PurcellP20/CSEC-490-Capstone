@@ -24,7 +24,7 @@ OPENSSL = os.environ.get("OPENSSL", "/usr/local/bin/openssl35")
 TLS_DIR = Path(os.environ.get("TLS_DIR", "/etc/pki/tls-hybrid"))
 TLS_CN = os.environ.get("TLS_CN", "tls-hybrid")
 TLS_DNS = os.environ.get("TLS_DNS", "tls-hybrid")
-TLS_IP = os.environ.get("TLS_IP", "192.168.205.152")
+TLS_IP = os.environ.get("TLS_IP", "192.168.205.100")
 HYBRID_GROUP = os.environ.get("HYBRID_GROUP", "X25519MLKEM768")
 TEST_PORT = os.environ.get("TEST_PORT", "4433")
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Post-quantum PKI CA (ML-DSA-65 certificate hierarchy). Port of setup-pki-pq.sh.
 
-Run on the PKI CA VM (192.168.205.151) as root:
+Run on the PKI CA VM (192.168.193.147) as root:
   sudo ./setup_pki_pq.py
   sudo ./setup_pki_pq.py sign <server.csr> <server-ext.cnf> [out-dir]
 

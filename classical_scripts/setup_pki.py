@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Classical (RSA) PKI: Root CA + Intermediate CA. Port of setup-pki.sh.
 
-Run on the PKI VM (192.168.205.151) as root:
+Run on the PKI VM (192.168.193.147) as root:
   sudo ./setup_pki.py                                  create Root CA + Intermediate CA
   sudo ./setup_pki.py sign <csr> <extfile> [out-dir]   sign a TLS server CSR
 """

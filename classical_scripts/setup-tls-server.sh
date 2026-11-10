@@ -6,12 +6,12 @@
 # Requires: openssl, scp/ssh to the PKI VM, and setup-pki.sh already
 # initialized there (copy it to PKI_SIGN_SCRIPT, default /usr/local/sbin/setup-pki.sh).
 #
-# Lab: this VM is 192.168.205.152. SSH to the PKI VM as owen@192.168.205.151.
+# Lab: this VM is 192.168.205.100. SSH to the PKI VM as owen@192.168.193.147.
 
 set -euo pipefail
 
 PKI_USER="${PKI_USER:-owen}"
-PKI_HOST="${PKI_HOST:-192.168.205.151}"
+PKI_HOST="${PKI_HOST:-192.168.193.147}"
 PKI_SIGN_SCRIPT="${PKI_SIGN_SCRIPT:-/usr/local/sbin/setup-pki.sh}"
 PKI_REMOTE_IN="${PKI_REMOTE_IN:-/tmp/tls-sign}"
 
@@ -19,7 +19,7 @@ TLS_DIR="${TLS_DIR:-/etc/pki/tls}"
 TLS_CN="${TLS_CN:-tls}"
 TLS_DNS="${TLS_DNS:-tls}"
 # Address clients use to reach this TLS VM (SAN).
-TLS_IP="${TLS_IP:-192.168.205.152}"
+TLS_IP="${TLS_IP:-192.168.205.100}"
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then

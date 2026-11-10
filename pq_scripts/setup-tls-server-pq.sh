@@ -32,14 +32,14 @@ require_openssl35() {
 }
 
 PKI_USER="${PKI_USER:-owen}"
-PKI_HOST="${PKI_HOST:-192.168.205.151}"
+PKI_HOST="${PKI_HOST:-192.168.193.147}"
 PKI_SIGN_SCRIPT="${PKI_SIGN_SCRIPT:-/usr/local/sbin/setup-pki-pq.sh}"
 PKI_REMOTE_IN="${PKI_REMOTE_IN:-/tmp/tls-sign-pq}"
 
 TLS_DIR="${TLS_DIR:-/etc/pki/tls-pq}"
 TLS_CN="${TLS_CN:-tls-pq}"
 TLS_DNS="${TLS_DNS:-tls-pq}"
-TLS_IP="${TLS_IP:-192.168.205.152}"
+TLS_IP="${TLS_IP:-192.168.205.100}"
 
 PQ_GROUP="${PQ_GROUP:-MLKEM768}"
 TEST_PORT="${TEST_PORT:-4443}"
