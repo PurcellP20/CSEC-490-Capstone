@@ -2,6 +2,8 @@
 """Run the 2-VM PKI setups from one client machine over SSH.
 
   python orchestrate.py check                      check SSH, python3 and sudo on both VMs
+  python orchestrate.py install-openssl            build the latest OpenSSL 3.5.x on both VMs and
+                                                   install it as /usr/local/bin/openssl35
   python orchestrate.py deploy -v pq               copy the scripts to both VMs
   python orchestrate.py run -v pq                  deploy + full CA / TLS setup
   python orchestrate.py start-server -v pq         start the TLS test listener (hybrid, pq)
@@ -56,6 +58,66 @@ CSR_FILES = ["server.csr", "server-ext.cnf"]
 SIGNED_FILES = ["server.crt", "server-fullchain.crt", "intermediate-ca.crt", "root-ca.crt"]
 
 q = shlex.quote
+
+# openssl35: latest OpenSSL release of the 3.5 series (the LTS the PQ/hybrid scripts need),
+# built from source into its own prefix so the system OpenSSL is untouched.
+OPENSSL_SERIES = os.environ.get("OPENSSL_SERIES", "3.5")
+OPENSSL_PREFIX = os.environ.get("OPENSSL_PREFIX", "/opt/openssl35")
+OPENSSL_WRAPPER = os.environ.get("OPENSSL_WRAPPER", "/usr/local/bin/openssl35")
+
+# Runs on each VM as root (plain POSIX sh).
+OPENSSL_INSTALL_SCRIPT = r"""#!/bin/sh
+set -eu
+BASE=https://www.openssl.org/source
+
+if ! command -v gcc >/dev/null || ! command -v make >/dev/null || ! command -v perl >/dev/null \
+   || ! command -v curl >/dev/null; then
+    echo "installing build dependencies"
+    if command -v apt-get >/dev/null; then
+        apt-get update && apt-get install -y build-essential perl curl ca-certificates
+    elif command -v dnf >/dev/null; then
+        dnf install -y gcc make perl perl-IPC-Cmd perl-core curl ca-certificates
+    elif command -v yum >/dev/null; then
+        yum install -y gcc make perl perl-IPC-Cmd perl-core curl ca-certificates
+    else
+        echo "no supported package manager; install gcc, make, perl and curl" >&2; exit 1
+    fi
+fi
+
+latest=$(curl -fsSL "$BASE/" | grep -o "openssl-${OPENSSL_SERIES}\.[0-9]*\.tar\.gz" \
+         | sort -uV | tail -n 1 | sed 's/\.tar\.gz$//')
+[ -n "$latest" ] || { echo "could not find an OpenSSL ${OPENSSL_SERIES}.x release" >&2; exit 1; }
+version=${latest#openssl-}
+echo "latest OpenSSL ${OPENSSL_SERIES} release: $version"
+
+if [ -x "$OPENSSL_WRAPPER" ] && "$OPENSSL_WRAPPER" version 2>/dev/null | grep -q "^OpenSSL $version "; then
+    echo "openssl35 is already at $version"; exit 0
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+curl -fsSLO "$BASE/$latest.tar.gz"
+curl -fsSL "$BASE/$latest.tar.gz.sha256" -o expected.sha256
+expected=$(awk '{print $1}' expected.sha256)
+actual=$(sha256sum "$latest.tar.gz" | awk '{print $1}')
+[ "$expected" = "$actual" ] || { echo "checksum mismatch for $latest.tar.gz" >&2; exit 1; }
+
+tar xzf "$latest.tar.gz"
+cd "$latest"
+./Configure --prefix="$OPENSSL_PREFIX" --openssldir="$OPENSSL_PREFIX/ssl" --libdir=lib \
+    "-Wl,-rpath,$OPENSSL_PREFIX/lib"
+make -j"$(nproc)"
+make install_sw install_ssldirs
+
+cat > "$OPENSSL_WRAPPER" <<EOF
+#!/bin/sh
+export LD_LIBRARY_PATH="$OPENSSL_PREFIX/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+exec "$OPENSSL_PREFIX/bin/openssl" "\$@"
+EOF
+chmod 755 "$OPENSSL_WRAPPER"
+"$OPENSSL_WRAPPER" version
+"""
 
 
 # --- connections ------------------------------------------------------------
@@ -225,6 +287,17 @@ def cmd_check(pki, tls, variants):
         check_sudo(host)
 
 
+def cmd_install_openssl(pki, tls, variants):
+    for host in (pki, tls):
+        print(f"== installing openssl35 on {host}")
+        staged = f"{STAGE_DIR}/install-openssl35.sh"
+        ssh(host, f"mkdir -p {q(STAGE_DIR)}")
+        write_file(host, staged, OPENSSL_INSTALL_SCRIPT.encode())
+        ssh_sudo(host, f"env OPENSSL_SERIES={q(OPENSSL_SERIES)} "
+                       f"OPENSSL_PREFIX={q(OPENSSL_PREFIX)} OPENSSL_WRAPPER={q(OPENSSL_WRAPPER)} "
+                       f"sh {q(staged)}")
+
+
 def cmd_deploy(pki, tls, variants):
     for v in variants:
         deploy_script(pki, v, VARIANTS[v]["ca"])
@@ -261,6 +334,7 @@ def cmd_teardown(pki, tls, variants):
 
 
 COMMANDS = {
+    "install-openssl": cmd_install_openssl,
     "teardown": cmd_teardown,
     "check": cmd_check,
     "deploy": cmd_deploy,
