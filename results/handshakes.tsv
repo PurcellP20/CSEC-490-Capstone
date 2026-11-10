@@ -1,0 +1,2 @@
+run_id	timestamp	variant	iteration	group	tls_version	cipher	signature_type	verified	latency_ms	ok
+20261110-181335	2026-11-10T18:13:40	pq	1	MLKEM768	TLSv1.3	TLS_AES_256_GCM_SHA384	mldsa65	OK	16.1	1

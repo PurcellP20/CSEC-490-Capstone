@@ -4,6 +4,7 @@
   python orchestrate.py check                      check SSH, python3 and sudo on both VMs
   python orchestrate.py install-openssl            build the latest OpenSSL 3.5.x on both VMs and
                                                    install it as /usr/local/bin/openssl35
+  python orchestrate.py install-openssl-local      same, on this machine (needed by "benchmark")
   python orchestrate.py deploy -v pq               copy the scripts to both VMs
   python orchestrate.py run -v pq                  deploy + full CA / TLS setup
   python orchestrate.py start-server -v pq         start the TLS test listener (hybrid, pq)
@@ -36,6 +37,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -66,7 +68,8 @@ VARIANTS = {
 RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", REPO / "results"))
 RUN_ID = datetime.now().strftime("%Y%m%d-%H%M%S")
 # OpenSSL 3.5+ on THIS machine, used by "benchmark" (s_client needs the PQ groups too).
-CLIENT_OPENSSL = os.environ.get("CLIENT_OPENSSL", "openssl")
+CLIENT_OPENSSL = os.environ.get("CLIENT_OPENSSL") or (
+    "/usr/local/bin/openssl35" if os.access("/usr/local/bin/openssl35", os.X_OK) else "openssl")
 
 TSV_COLUMNS = {
     "steps": ["run_id", "timestamp", "variant", "step", "host", "seconds", "ok"],
@@ -287,8 +290,12 @@ def start_test_server(tls, variant):
     log = f"{stage_dir(variant)}/test-server.log"
     make_stage_dir(tls, variant)
     # "sudo -v" asks for the password up front, before the server goes to the background.
-    ssh(tls, f"sudo -v && sudo setsid nohup {q(installed(VARIANTS[variant]['tls']))} "
-             f"test-server > {q(log)} 2>&1 < /dev/null &")
+    # sudo stays in the foreground (so it can prompt) and runs a root shell that
+    # detaches the server and exits. Backgrounding sudo itself gets it killed by
+    # SIGHUP when the ssh pty closes, leaving an empty log.
+    inner = (f"setsid nohup {q(installed(VARIANTS[variant]['tls']))} test-server "
+             f"> {q(log)} 2>&1 < /dev/null &")
+    ssh(tls, f"sudo sh -c {q(inner)}")
 
 
 def check_test_server(tls, variant):
@@ -436,6 +443,19 @@ def cmd_install_openssl(pki, tls, variants, count=None):
                        f"sh {q(staged)}")
 
 
+def cmd_install_openssl_local(pki, tls, variants, count=None):
+    """Build openssl35 on THIS machine (for "benchmark"); runs the script under local sudo."""
+    print("== installing openssl35 on this machine")
+    with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
+        f.write(OPENSSL_INSTALL_SCRIPT)
+    try:
+        subprocess.run(["sudo", "env", f"OPENSSL_SERIES={OPENSSL_SERIES}",
+                        f"OPENSSL_PREFIX={OPENSSL_PREFIX}", f"OPENSSL_WRAPPER={OPENSSL_WRAPPER}",
+                        "sh", f.name], check=True)
+    finally:
+        os.unlink(f.name)
+
+
 def cmd_deploy(pki, tls, variants, count=None):
     for v in variants:
         deploy_script(pki, v, VARIANTS[v]["ca"])
@@ -486,6 +506,7 @@ def cmd_teardown(pki, tls, variants, count=None):
 
 COMMANDS = {
     "install-openssl": cmd_install_openssl,
+    "install-openssl-local": cmd_install_openssl_local,
     "teardown": cmd_teardown,
     "collect": cmd_collect,
     "benchmark": cmd_benchmark,
