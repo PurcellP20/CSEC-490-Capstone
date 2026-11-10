@@ -6,6 +6,8 @@
   python orchestrate.py run -v pq                  deploy + full CA / TLS setup
   python orchestrate.py start-server -v pq         start the TLS test listener (hybrid, pq)
   python orchestrate.py stop-server -v pq
+  python orchestrate.py teardown -v pq             stop the server and delete the CA / TLS / staging
+                                                   dirs on both VMs, so "run" starts fresh
 
 The variant (-v) is classical, hybrid, pq or all (default: all).
 
@@ -33,12 +35,21 @@ INSTALL_DIR = os.environ.get("INSTALL_DIR", "/usr/local/sbin")  # scripts on the
 STAGE_DIR = os.environ.get("STAGE_DIR", "/tmp/pki-orch")        # transfer dir on the VMs
 
 VARIANTS = {
+    # "pki_dirs" / "tls_dirs": what the setup scripts create on each VM (their default
+    # locations). Classical lists the CA subdirs, not /etc/pki itself, because /etc/pki
+    # can also hold the system trust store.
     "classical": {"dir": "classical_scripts", "ca": "setup_pki.py",
-                  "tls": "setup_tls_server.py", "port": None},
+                  "tls": "setup_tls_server.py", "port": None,
+                  "pki_dirs": ["/etc/pki/root-ca", "/etc/pki/intermediate-ca"],
+                  "tls_dirs": ["/etc/pki/tls"]},
     "hybrid": {"dir": "hybrid_scripts", "ca": "setup_pki_hybrid.py",
-               "tls": "setup_tls_server_hybrid.py", "port": 4433},
+               "tls": "setup_tls_server_hybrid.py", "port": 4433,
+               "pki_dirs": ["/etc/pki-hybrid"],
+               "tls_dirs": ["/etc/pki/tls-hybrid"]},
     "pq": {"dir": "pq_scripts", "ca": "setup_pki_pq.py",
-           "tls": "setup_tls_server_pq.py", "port": 4443},
+           "tls": "setup_tls_server_pq.py", "port": 4443,
+           "pki_dirs": ["/etc/pki-pq"],
+           "tls_dirs": ["/etc/pki/tls-pq"]},
 }
 
 CSR_FILES = ["server.csr", "server-ext.cnf"]
@@ -185,6 +196,27 @@ def stop_test_server(tls, variant):
     ssh_sudo(tls, f"pkill -f 's_server -accep[t] {port}'")
 
 
+def remove_dirs(host, paths):
+    for path in paths:
+        # Never rm -rf "/" or a top-level dir like /etc.
+        if not path.startswith("/") or len(path.strip("/").split("/")) < 2:
+            raise ValueError(f"refusing to remove {path!r}")
+        print(f"  removing {host}:{path}")
+        ssh_sudo(host, f"rm -rf -- {q(path)}")
+
+
+def teardown_variant(pki, tls, variant):
+    info = VARIANTS[variant]
+    print(f"== [{variant}] tearing down {pki} and {tls}")
+    if info["port"]:
+        try:
+            stop_test_server(tls, variant)
+        except subprocess.CalledProcessError:
+            pass  # pkill exits 1 when nothing was running
+    remove_dirs(pki, info["pki_dirs"] + [stage_dir(variant)])
+    remove_dirs(tls, info["tls_dirs"] + [stage_dir(variant)])
+
+
 # --- commands ---------------------------------------------------------------
 def cmd_check(pki, tls, variants):
     for host in (pki, tls):
@@ -222,7 +254,14 @@ def cmd_stop_server(pki, tls, variants):
         stop_test_server(tls, v)
 
 
+def cmd_teardown(pki, tls, variants):
+    for v in variants:
+        teardown_variant(pki, tls, v)
+        print(f"== [{v}] torn down")
+
+
 COMMANDS = {
+    "teardown": cmd_teardown,
     "check": cmd_check,
     "deploy": cmd_deploy,
     "run": cmd_run,
