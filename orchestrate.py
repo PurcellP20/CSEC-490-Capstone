@@ -10,6 +10,11 @@
   python orchestrate.py stop-server -v pq
   python orchestrate.py teardown -v pq             stop the server and delete the CA / TLS / staging
                                                    dirs on both VMs, so "run" starts fresh
+  python orchestrate.py collect -v pq              record certificate / key sizes and metadata
+  python orchestrate.py benchmark -v pq -n 50      run N TLS handshakes from this machine against the
+                                                   running test server and record them
+
+"run" also records per-step timings. All measurements are appended to TSV files in results/.
 
 The variant (-v) is classical, hybrid, pq or all (default: all).
 
@@ -27,9 +32,12 @@ written over SSH to the other):
 """
 import argparse
 import os
+import re
 import shlex
 import subprocess
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
@@ -41,17 +49,31 @@ VARIANTS = {
     # locations). Classical lists the CA subdirs, not /etc/pki itself, because /etc/pki
     # can also hold the system trust store.
     "classical": {"dir": "classical_scripts", "ca": "setup_pki.py",
-                  "tls": "setup_tls_server.py", "port": None,
+                  "tls": "setup_tls_server.py", "port": None, "group": None,
                   "pki_dirs": ["/etc/pki/root-ca", "/etc/pki/intermediate-ca"],
                   "tls_dirs": ["/etc/pki/tls"]},
     "hybrid": {"dir": "hybrid_scripts", "ca": "setup_pki_hybrid.py",
-               "tls": "setup_tls_server_hybrid.py", "port": 4433,
+               "tls": "setup_tls_server_hybrid.py", "port": 4433, "group": "X25519MLKEM768",
                "pki_dirs": ["/etc/pki-hybrid"],
                "tls_dirs": ["/etc/pki/tls-hybrid"]},
     "pq": {"dir": "pq_scripts", "ca": "setup_pki_pq.py",
-           "tls": "setup_tls_server_pq.py", "port": 4443,
+           "tls": "setup_tls_server_pq.py", "port": 4443, "group": "MLKEM768",
            "pki_dirs": ["/etc/pki-pq"],
            "tls_dirs": ["/etc/pki/tls-pq"]},
+}
+
+# Measurements are appended to TSV files here; every row carries a run id and variant.
+RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", REPO / "results"))
+RUN_ID = datetime.now().strftime("%Y%m%d-%H%M%S")
+# OpenSSL 3.5+ on THIS machine, used by "benchmark" (s_client needs the PQ groups too).
+CLIENT_OPENSSL = os.environ.get("CLIENT_OPENSSL", "openssl")
+
+TSV_COLUMNS = {
+    "steps": ["run_id", "timestamp", "variant", "step", "host", "seconds", "ok"],
+    "artifacts": ["run_id", "timestamp", "variant", "host", "file", "bytes",
+                  "signature_algorithm", "public_key_algorithm", "not_before", "not_after"],
+    "handshakes": ["run_id", "timestamp", "variant", "iteration", "group", "tls_version",
+                   "cipher", "signature_type", "verified", "latency_ms", "ok"],
 }
 
 CSR_FILES = ["server.csr", "server-ext.cnf"]
@@ -129,6 +151,32 @@ def ssh(host, command):
 
 def ssh_sudo(host, command):
     ssh(host, f"sudo {command}")
+
+
+# --- results ----------------------------------------------------------------
+def record(table, **fields):
+    """Append one row to results/<table>.tsv (writes the header for a new file)."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"{table}.tsv"
+    row = {"run_id": RUN_ID, "timestamp": datetime.now().isoformat(timespec="seconds"), **fields}
+    new = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        if new:
+            f.write("\t".join(TSV_COLUMNS[table]) + "\n")
+        f.write("\t".join(str(row.get(c, "")).replace("\t", " ").replace("\n", " ")
+                          for c in TSV_COLUMNS[table]) + "\n")
+
+
+def timed(variant, step, host, func, *args):
+    """Run func(*args) and record how long it took (includes SSH and sudo overhead)."""
+    start = time.perf_counter()
+    ok = False
+    try:
+        func(*args)
+        ok = True
+    finally:
+        record("steps", variant=variant, step=step, host=host.split("@")[-1],
+               seconds=f"{time.perf_counter() - start:.3f}", ok=int(ok))
 
 
 # --- file transfers ---------------------------------------------------------
@@ -279,15 +327,105 @@ def teardown_variant(pki, tls, variant):
     remove_dirs(tls, info["tls_dirs"] + [stage_dir(variant)])
 
 
+# --- data collection --------------------------------------------------------
+# Runs on a VM as root: one TSV line per file (name, bytes, signature alg, public key alg, dates).
+COLLECT_SCRIPT = r"""
+O=@WRAPPER@; [ -x "$O" ] || O=openssl
+out=@OUT@
+: > "$out"
+emit() {
+    f=$1; sig=; pub=; nb=; na=
+    case $f in
+        */server-fullchain.crt) ;;
+        *.crt)
+            t=$("$O" x509 -noout -text -in "$f")
+            sig=$(echo "$t" | grep -m1 'Signature Algorithm' | sed 's/.*: *//')
+            pub=$(echo "$t" | grep -m1 'Public Key Algorithm' | sed 's/.*: *//')
+            nb=$("$O" x509 -noout -startdate -in "$f" | cut -d= -f2)
+            na=$("$O" x509 -noout -enddate -in "$f" | cut -d= -f2) ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(basename "$f")" "$(wc -c < "$f")" "$sig" "$pub" "$nb" "$na" >> "$out"
+}
+for f in @STAGE@/server.csr @STAGE@/server.crt @STAGE@/server-fullchain.crt \
+         @STAGE@/intermediate-ca.crt @STAGE@/root-ca.crt; do
+    [ -f "$f" ] && emit "$f"
+done
+for f in $(find @DIRS@ -name '*.key' 2>/dev/null); do emit "$f"; done
+chmod 644 "$out"
+exit 0
+"""
+
+
+def collect_artifacts(host, variant, dirs):
+    print(f"== [{variant}] collecting artifact sizes and metadata from {host}")
+    stage = stage_dir(variant)
+    out = f"{stage}/artifacts.tsv"
+    make_stage_dir(host, variant)
+    script = (COLLECT_SCRIPT.replace("@WRAPPER@", q(OPENSSL_WRAPPER)).replace("@OUT@", q(out))
+              .replace("@STAGE@", q(stage)).replace("@DIRS@", " ".join(q(d) for d in dirs)))
+    ssh_sudo(host, f"sh -c {q(script)}")
+    for line in read_file(host, out).decode().splitlines():
+        name, size, sig, pub, nb, na = (line.split("\t") + [""] * 6)[:6]
+        record("artifacts", variant=variant, host=host.split("@")[-1], file=name, bytes=size,
+               signature_algorithm=sig, public_key_algorithm=pub, not_before=nb, not_after=na)
+
+
+def require_pq_client():
+    try:
+        version = subprocess.run([CLIENT_OPENSSL, "version"], capture_output=True, text=True,
+                                 check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        raise SystemExit(f"Cannot run CLIENT_OPENSSL={CLIENT_OPENSSL!r}")
+    if not re.match(r"OpenSSL\s3\.([5-9]|\d\d)\.", version):
+        raise SystemExit(f"benchmark needs OpenSSL 3.5+ on this machine (PQ groups); "
+                         f"{CLIENT_OPENSSL!r} reports: {version}\n"
+                         "Set CLIENT_OPENSSL to a 3.5+ openssl binary.")
+    print(f"== client: {version}")
+
+
+def handshake_once(host, port, group, ca_file):
+    """One TLS 1.3 handshake with s_client; returns (latency_ms, ok, info)."""
+    cmd = [CLIENT_OPENSSL, "s_client", "-connect", f"{host}:{port}", "-tls1_3",
+           "-groups", group, "-CAfile", str(ca_file), "-verify_ip", host, "-brief"]
+    start = time.perf_counter()
+    result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                            timeout=30)
+    ms = (time.perf_counter() - start) * 1000
+    text = result.stdout + result.stderr  # -brief prints to stderr
+    info = {}
+    for key, label in (("tls_version", "Protocol version"), ("cipher", "Ciphersuite"),
+                       ("signature_type", "Signature type"), ("verified", "Verification")):
+        m = re.search(rf"^{label}:\s*(.+)$", text, re.M)
+        info[key] = m.group(1).strip() if m else ""
+    ok = "CONNECTION ESTABLISHED" in text and info["verified"] == "OK"
+    return ms, ok, info
+
+
+def benchmark_variant(tls, variant, count):
+    info = VARIANTS[variant]
+    host = tls.split("@")[-1]
+    ca_file = RESULTS_DIR / "ca" / f"{variant}-root-ca.crt"
+    ca_file.parent.mkdir(parents=True, exist_ok=True)
+    ca_file.write_bytes(read_file(tls, f"{stage_dir(variant)}/root-ca.crt"))
+    print(f"== [{variant}] {count} handshakes to {host}:{info['port']} ({info['group']})")
+    handshake_once(host, info["port"], info["group"], ca_file)  # warm-up, not recorded
+    for i in range(1, count + 1):
+        ms, ok, res = handshake_once(host, info["port"], info["group"], ca_file)
+        record("handshakes", variant=variant, iteration=i, group=info["group"],
+               latency_ms=f"{ms:.1f}", ok=int(ok), **res)
+        if not ok:
+            print(f"  handshake {i} failed (is the test server running? try start-server)")
+
+
 # --- commands ---------------------------------------------------------------
-def cmd_check(pki, tls, variants):
+def cmd_check(pki, tls, variants, count=None):
     for host in (pki, tls):
         check_connection(host)
         check_python(host)
         check_sudo(host)
 
 
-def cmd_install_openssl(pki, tls, variants):
+def cmd_install_openssl(pki, tls, variants, count=None):
     for host in (pki, tls):
         print(f"== installing openssl35 on {host}")
         staged = f"{STAGE_DIR}/install-openssl35.sh"
@@ -298,36 +436,49 @@ def cmd_install_openssl(pki, tls, variants):
                        f"sh {q(staged)}")
 
 
-def cmd_deploy(pki, tls, variants):
+def cmd_deploy(pki, tls, variants, count=None):
     for v in variants:
         deploy_script(pki, v, VARIANTS[v]["ca"])
         deploy_script(tls, v, VARIANTS[v]["tls"])
 
 
-def cmd_run(pki, tls, variants):
+def cmd_run(pki, tls, variants, count=None):
     cmd_deploy(pki, tls, variants)
     for v in variants:
-        ca_init(pki, v)
-        tls_make_csr(tls, v)
-        transfer_csr(tls, pki, v)
-        ca_sign(pki, v)
-        transfer_certs(pki, tls, v)
-        tls_install_certs(tls, v)
+        timed(v, "ca_init", pki, ca_init, pki, v)
+        timed(v, "tls_csr", tls, tls_make_csr, tls, v)
+        timed(v, "transfer_csr", tls, transfer_csr, tls, pki, v)
+        timed(v, "ca_sign", pki, ca_sign, pki, v)
+        timed(v, "transfer_certs", pki, transfer_certs, pki, tls, v)
+        timed(v, "tls_install_certs", tls, tls_install_certs, tls, v)
+        cmd_collect(pki, tls, [v])
         print(f"== [{v}] done")
 
 
-def cmd_start_server(pki, tls, variants):
+def cmd_collect(pki, tls, variants, count=None):
+    for v in variants:
+        collect_artifacts(pki, v, VARIANTS[v]["pki_dirs"])
+        collect_artifacts(tls, v, VARIANTS[v]["tls_dirs"])
+
+
+def cmd_benchmark(pki, tls, variants, count=50):
+    require_pq_client()
+    for v in variants:
+        benchmark_variant(tls, v, count)
+
+
+def cmd_start_server(pki, tls, variants, count=None):
     for v in variants:
         start_test_server(tls, v)
         check_test_server(tls, v)
 
 
-def cmd_stop_server(pki, tls, variants):
+def cmd_stop_server(pki, tls, variants, count=None):
     for v in variants:
         stop_test_server(tls, v)
 
 
-def cmd_teardown(pki, tls, variants):
+def cmd_teardown(pki, tls, variants, count=None):
     for v in variants:
         teardown_variant(pki, tls, v)
         print(f"== [{v}] torn down")
@@ -336,6 +487,8 @@ def cmd_teardown(pki, tls, variants):
 COMMANDS = {
     "install-openssl": cmd_install_openssl,
     "teardown": cmd_teardown,
+    "collect": cmd_collect,
+    "benchmark": cmd_benchmark,
     "check": cmd_check,
     "deploy": cmd_deploy,
     "run": cmd_run,
@@ -349,13 +502,15 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("-v", "--variant", choices=[*VARIANTS, "all"], default="all")
+    parser.add_argument("-n", "--count", type=int, default=50,
+                        help="handshakes per variant for benchmark (default: 50)")
     parser.add_argument("--user", default="owen", help="SSH user on both VMs")
     parser.add_argument("--pki-host", default="192.168.193.147")
     parser.add_argument("--tls-host", default="192.168.205.100")
     args = parser.parse_args()
 
     variants = list(VARIANTS) if args.variant == "all" else [args.variant]
-    if args.command in ("start-server", "stop-server"):
+    if args.command in ("start-server", "stop-server", "benchmark"):
         variants = [v for v in variants if VARIANTS[v]["port"]]
         if not variants:
             parser.error("the classical variant has no test server")
@@ -363,7 +518,7 @@ def main():
     pki = f"{args.user}@{args.pki_host}"
     tls = f"{args.user}@{args.tls_host}"
     try:
-        COMMANDS[args.command](pki, tls, variants)
+        COMMANDS[args.command](pki, tls, variants, args.count)
     except subprocess.CalledProcessError as e:
         print(f"\nFAILED (exit {e.returncode}): {' '.join(e.cmd)}", file=sys.stderr)
         return 1

@@ -16,6 +16,8 @@ python orchestrate.py <command> [-v VARIANT]
 | `run -v pq` | Deploy, then run the full CA / TLS setup |
 | `start-server -v pq` | Start the TLS test listener (hybrid, pq only) |
 | `stop-server -v pq` | Stop the TLS test listener |
+| `collect -v pq` | Record key / CSR / certificate sizes and certificate metadata (also done at the end of `run`) |
+| `benchmark -v pq -n 50` | Run N TLS 1.3 handshakes from this machine against the running test server (hybrid, pq only) |
 | `teardown -v pq` | Stop the server and delete the CA / TLS / staging directories on both VMs, so `run` starts fresh |
 
 ## Options
@@ -38,3 +40,15 @@ python orchestrate.py <command> [-v VARIANT]
 | `STAGE_DIR` | Transfer directory on the VMs (default: `/tmp/pki-orch`) |
 
 `install-openssl` needs outbound internet access from the VMs (openssl.org). It verifies the tarball's SHA-256, leaves the system OpenSSL untouched, and does nothing if `openssl35` is already at the latest release.
+
+## Collected data
+
+Measurements are appended to tab-separated files in `results/` (override with `RESULTS_DIR`). Every row has a `run_id` and `variant`, so repeated runs accumulate and open directly in Excel or pandas.
+
+| File | Written by | Columns |
+|---|---|---|
+| `steps.tsv` | `run` | step name, host, seconds, ok. Timed from the client, so it includes SSH and sudo overhead. |
+| `artifacts.tsv` | `run`, `collect` | file, bytes, signature algorithm, public-key algorithm, validity dates |
+| `handshakes.tsv` | `benchmark` | iteration, group, TLS version, cipher, signature type, verified, latency_ms, ok |
+
+`benchmark` runs `openssl s_client` on this machine, so it needs OpenSSL 3.5+ locally (set `CLIENT_OPENSSL` to its path). Start the listener first with `start-server`.
