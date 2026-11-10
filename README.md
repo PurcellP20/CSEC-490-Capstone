@@ -1,13 +1,27 @@
-orchestrate.py is used to perform the various PKI operations between VMs. 
+# CSEC-490 Capstone
 
--------------------------------------------------------------------------------
+`orchestrate.py` runs the 2-VM PKI setups (classical, hybrid, and post-quantum) from one client machine over SSH.
 
-python orchestrate.py check                      check SSH, python3 and sudo on both VMs
-python orchestrate.py deploy -v pq               copy the scripts to both VMs
-python orchestrate.py run -v pq                  deploy + full CA / TLS setup
-python orchestrate.py start-server -v pq         start the TLS test listener (hybrid, pq)
-python orchestrate.py stop-server -v pq
+## Usage
 
--------------------------------------------------------------------------------
+```
+python orchestrate.py <command> [-v VARIANT]
+```
 
-The variant (-v) is classical, hybrid, pq or all (default: all).
+| Command | Description |
+|---|---|
+| `check` | Check SSH, python3 and sudo on both VMs |
+| `deploy -v pq` | Copy the scripts to both VMs |
+| `run -v pq` | Deploy, then run the full CA / TLS setup |
+| `start-server -v pq` | Start the TLS test listener (hybrid, pq only) |
+| `stop-server -v pq` | Stop the TLS test listener |
+| `teardown -v pq` | Stop the server and delete the CA / TLS / staging directories on both VMs, so `run` starts fresh |
+
+## Options
+
+| Option | Description |
+|---|---|
+| `-v`, `--variant` | `classical`, `hybrid`, `pq` or `all` (default: `all`) |
+| `--user` | SSH user on both VMs (default: `owen`) |
+| `--pki-host` | PKI VM address |
+| `--tls-host` | TLS VM address |
